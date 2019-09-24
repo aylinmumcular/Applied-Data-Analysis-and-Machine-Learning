@@ -1,0 +1,371 @@
+---
+title: "Predicting the default probabilities"
+author: "Aylin Mumcular"
+date: "29 Mart 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+require(magrittr)
+require(tidyverse)
+require(knitr)
+#require(ISLR)
+d <- ISLR::Default
+knitr::opts_chunk$set(echo = TRUE, cache=TRUE)
+```
+
+## Explore
+
+```{r}
+head(d)
+dim(d)
+summary(d)
+
+d %>% count(default) %>% 
+  mutate(prop=n/sum(n))
+
+```
+
+```{r}
+d %>% 
+  ggplot(aes(balance,income))+
+  geom_point(aes(col=default),alpha=0.5)  
+
+d %>% 
+  count(default,student) %>% 
+  group_by(default) %>%   
+  mutate(prop=n/sum(n)) %>% 
+  select(-n) %>%   
+  spread(student,prop) 
+
+d %>% 
+  count(default,student) %>% 
+  group_by(student) %>%   
+  mutate(prop=n/sum(n)) %>% 
+  select(-n) %>%   
+  spread(default,prop) #if you know someone is a student what's the likelihoood that this person is gonna default
+
+
+d %>% ggplot(aes(income))+
+  geom_density(aes(fill=student),alpha=0.5) 
+
+d %>% ggplot(aes(balance))+
+  geom_density(aes(fill=student),alpha=0.5)  
+
+d %>% ggplot(aes(balance,income))+
+  geom_density2d(aes(col=student))
+
+#Students on average make less money than non-students. No relation between income and default. People with high balance tend to default more. 
+```
+
+
+Fit a logistic regression to our default data.
+
+$$
+p_i = \frac{e^{x_i^\top \beta}}{1+e^{x_i^\top \beta}}
+$$
+Let's glm() to find p_i in terms of inputs. 
+
+```{r}
+d$default %>% levels()
+
+glmod <- glm(default~student+balance+income,d,family="binomial") 
+glmod
+
+
+```
+
+Test the goodness of the fit of the current model. Using the asymptotic theory:
+
+```{r}
+curve(dchisq(x,df=df.residual(glmod)),xlim=c(500,10500)) 
+abline(v=deviance(glmod)) 
+pvalue <- pchisq(deviance(glmod),
+                 df=df.residual(glmod),lower.tail=FALSE)   
+pvalue
+
+```
+
+This is overly optimistic, because chi-square approximation to deviance is not good for the logistic regression version of GLM.
+Instead let's calculate the null distribution of the deviance. Distribution when the null hypothesis is correct. (Namely, distribution of deviance under $H_0: \text{the current model is correct}$ using bootstrapping.)
+
+```{r}
+glmod
+repl <- 1000
+sim_res <- simulate(glmod,repl) #simulates response. Cooked my own data 
+dim(sim_res)
+
+set.seed(545)
+deviance_array <- NULL
+for(i in seq(repl)){ #get rid of original data, plug cooked ones and refit the model
+  d.sim <- mutate(d,default=sim_res[,i]) #replace original ith data
+  glmod.sim <- update(glmod,data=d.sim)
+  deviance_array[i] <- deviance(glmod.sim)
+}
+
+glmod
+head(deviance_array)
+deviance(glmod)
+i=1
+
+```
+
+```{r pval}
+deviance_array %>% density %>% plot  #hat distr
+abline(v=deviance(glmod)) 
+
+pval <- mean(deviance_array>deviance(glmod)) 
+pval 
+```
+Because the pvalue (`r pval`) is greater than 0.05, we cannot reject the null hypo $H_0: \text{the current model is correct}$ at 5% or less % of level of significance. Our level is fitting fine.
+
+```{r}
+predict(glmod,type="response")[1:3]
+```
+
+##Important variables?
+
+```{r}
+glmod %>% coef
+
+```
+Does being a non-student applicant increase the credit default?
+Test 
+
+$$
+
+H_0: \beta_\mathrm{StudentYes}=0
+$$
+I can use **Wald test**. I know that
+$\hat\beta_\mathrm{StudentYes}$ has approximately Normal distribution with mean $\beta_\mathrm{StudentYes}$ and $\mathrm{se}(\hat\beta_\mathrm{StudentYes})^2$. This is located at the diagonal entry of
+
+```{r}
+vcov(glmod)
+```
+
+z values are reported in the summary of the fitted model. 
+
+```{r}
+summary(glmod)  #Being a student plays an important role, significant due to p value of 0.006
+```
+
+Alternatively, I can test with **likelihood-ratio** test 
+```{r}
+
+anova(
+  update(glmod,.~.-student-income),
+  glmod, test="Chi") 
+
+
+
+anova(
+  update(glmod,.~.-student), 
+  glmod, test="Chi") 
+
+anova(
+  update(glmod,.~.-income), 
+  #Statistically cannot find sufficient evidence to suggest that income is important. 
+  glmod, test="Chi") 
+```
+
+**Is the effect of balance equal to 6(10^-3)
+H0: Beta_balance=6(10^-3)
+
+Test $H_0:\beta_\mathrm{balance}=0.006$.
+
+```{r}
+#Big model logit(pi)=beta0+beta1 studentYes+beta2 balance+beta3 income
+#Under H0: logit(pi)=beta0+beta1 studentYes+6(10^-3) balance+beta3 income
+
+small <- glm(default~student+income+offset(6e-3*balance),d,family="binomial")
+
+anova(small,glmod,test="LRT") #LRT is the same with Chi
+
+#we are unable to reject null hypo. That estimate is consistent with the data.
+```
+
+Confidence intervals for the effect sizes
+```{r}
+#confidence interval
+
+confint(glmod, level=0.80)  
+```
+
+
+**Do the effects of balance and income on default risk the same? (beta_balance and beta_income)
+H0: Beta_balance=Beta_income=Beta_common
+
+logit pi=beta_0+beta_student studentYes+beta_common (balance+income)
+
+Test $H_0:\beta_\mathrm{balance}=\beta_\mathrm{income}$.
+
+```{r}
+small <- glm(default~student+I(balance+income),d,family="binomial") 
+
+d2 <- mutate(d,common=balance+income) #another way
+
+small2 <- glm(default~student+common,d2,family="binomial")
+
+anova(small2,glmod,test="Chi") #Reject and conclude that their effects are not the same.
+
+anova(small,glmod,test="Chi") 
+```
+
+```{r}
+step(glmod) 
+
+drop1(glmod) 
+
+
+```
+
+Predictions of default probabilities
+
+```{r}
+invisible(predict(glmod)) 
+
+logistic <- function(x) exp(x)/(1+exp(x))
+invisible(predict(glmod) %>% logistic)
+
+preds <- predict(glmod,type="response") 
+
+
+methods("predict")
+        
+```
+
+The misclassification error is minimized by the Bayes rule which classifies someone as defaulting if predicted default prob şs greater than or equal to 0.5
+
+```{r}
+cls <- levels(d$default)[1+(preds>=0.5)] 
+
+```
+
+Confusion table
+
+```{r}
+tbl <- table(obs=d$default,preds=cls) 
+
+tbl %>% prop.table %>% diag %>% sum %>% {1-.}
+tbl %>% prop.table(1)  #almost 70% of people misclassified. It cannot identify risky people very well. 
+
+table(d$default) %>% prop.table() 
+
+
+```
+ False negative rate (labeling a default as no default) is 228/10000 which is too high. To reduce that I will try to reduce the threshold on the probability of default.
+ 
+```{r}
+
+cls2 <- levels(d$default)[1+(preds>=0.1)] 
+
+tbl2 <- table(obs=d$default,preds=cls2) 
+
+tbl2 %>% prop.table %>% diag %>% sum %>% {1-.}
+tbl2 %>% prop.table(1)  
+```
+
+Cross-validated (Alternative to AIC, BIC, ANOVA. You can use this method to compare models and decide which variables to keep in the model) misclassification and false negative rates
+
+```{r}
+#shuffle the data to avoid data of the same kind. 
+nfold <- 10 
+set.seed(451)
+fold.id <- rep(1:10,len=nrow(d)) %>% sample 
+table(fold.id) 
+error.rate <- rep(NA,nfold)
+fn.rate <- rep(NA,nfold) 
+
+
+
+for (i in seq(nfold)) {
+  
+ 
+  glmod.train <- glm(default~.,data=d[fold.id!=i,],
+                     family="binomial") 
+  preds <- predict(glmod.train,newdata=d[fold.id==i,],
+                   type="response")
+  
+  cls <- c("No","Yes")[1+(preds>=.5)] #estimate error rate on unseen data
+  
+  cnfsn.tbl <- table(obs=d[fold.id==i,"default"],
+                     preds=cls)   #confusion table
+  error.rate[i] <- prop.table(cnfsn.tbl) %>% diag %>% sum %>% {1-.} #misclassification rate
+  
+  fn.rate[i] <- prop.table(cnfsn.tbl,1)["Yes","No"] #observed yes predicted no
+}
+ 
+m <- error.rate %>% mean
+s <- error.rate %>% sd
+
+#95% CI for error rate on the unseen data/generalization error rate
+
+m+c(-1,1)*s*1.96 #alpha=0.05  , m+(c(-1,1))*qnorm(1-alpha/2)*s
+
+m2 <- fn.rate %>% mean
+s2 <- fn.rate %>% sd
+
+#95% CI for false negative rate on the unseen data
+
+m2+c(-1,1)*s2*1.96  
+```
+
+#Calculate ROC and AUC
+
+```{r,fig.asp=0.5}
+glmod
+ROC.df <- data_frame(class=d$default,p=fitted(glmod)) %>%  #probabilities
+  arrange(desc(p)) %>% #sort this data. Highest p at the top, the one most likely to default
+  mutate(NumTP=cumsum(class=="Yes")-(class=="Yes"), 
+         NumFP=cumsum(class=="No")-(class=="No"),
+         TPR=NumTP/sum(class=="Yes"),
+         FPR=NumFP/sum(class=="No"))   #NTP=Number of true positives. Anyone with a threshold of strictly greater than this number will be named as positive. 
+
+plot(TPR~FPR,ROC.df,type="s")
+abline(0,1)
+
+#how to calculate area under curve
+
+TPR <- extract2(ROC.df,"TPR")
+FPR <- extract2(ROC.df,"FPR")
+
+
+AUC <- sum((tail(FPR,-1)-head(FPR,-1))*(head(TPR,-1)+tail(TPR,-1))/2) 
+
+AUC
+
+
+ROC.df %>% mutate(dist=FPR^2+(1-TPR)^2) %>% 
+  arrange(dist)
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

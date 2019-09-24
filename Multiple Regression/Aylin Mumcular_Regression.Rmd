@@ -1,0 +1,368 @@
+---
+title: "Analysis of the impact of advertising with different media types on sales"
+author: "Aylin Mumcular"
+date: "February 1, 2018"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+always_allow_html: yes
+---
+
+
+```{r setup, include=FALSE, echo = TRUE}
+require(magrittr)
+require(tidyverse)
+require(lattice)
+require(modelr)
+require(R.utils)
+require(knitr)
+require(kableExtra)
+opts_chunk$set(echo = FALSE, collapse=TRUE)
+```
+
+
+# Introduction
+The objective of this study is to help the ABC company design an effective advertising compaign in a new market. There are three  main media channels for advertising: *TV*, *Radio*, *Newspaper*.  The data contain budgets spent for advertising  on each media type (in \$ 1,000) and sales quantities (in 1,000 units) for 200 markets.
+
+```{r}
+d <- read.csv("Advertising.csv")
+d <- d[,-1]
+
+head(d)
+
+
+```
+
+Figure \@ref(fig:pairs) shows the pairwise scatterplots of variables. 
+
+```{r pairs, out.width="100%", fig.asp=1, fig.cap="Pairwise scatterplots of variables"}
+source("panel.r")
+pairs(rev(d), 
+      upper.panel = function(..., 
+                             col="gray", 
+                             lwd=1.5, 
+                             span=.2) 
+        panel.smooth(..., col=col, lwd=lwd, span=span),
+      diag.panel = panel.hist,
+      lower.panel = panel.cor)
+```
+
+
+  
+## Multiple regression
+
+From the first row of Figure \@ref(fig:pairs), the number of sales increases as the budgets of Radio and TV advertising increase. Also note that the variance of Sales increases as well. One of the multiple regression assumptions is that the variance remains constant. To reduce the variance of positive valued variables, I will take their logarithm. Let's define a new variable logSales as the logarithm of Sales and model it with a multiple regression of TV, Radio, and Newspaper.
+
+$$
+  y = X \beta + \varepsilon
+$$
+Table \@ref(tab:pairslogSales) displays the new variable logSales. Figure \@ref(fig:pairslogSales) shows a positive association between logSales and TV, Radio, Newspaper advertising budgets. Moreover, variance of logSales is indeed under more control.
+
+```{r pairslogSales, fig.asp=1, fig.cap="Pairwise scatter plots of logSales, TV, Radio, and Newspapers "}
+d2 <- d %>% 
+  mutate(logSales = log(Sales)) %>% 
+  select(-Sales)
+
+d2 %>% 
+  kable(caption="Data with logSales replacing Sales", format="html") %>% 
+  kable_styling(full_width=FALSE) %>% 
+  scroll_box(width="700px", height="500px")
+
+  
+pairs(rev(d2), 
+      upper.panel = function(..., 
+                             col="gray", 
+                             lwd=1.5, 
+                             span=.2) 
+        panel.smooth(..., col=col, lwd=lwd, span=span),
+      diag.panel = panel.hist,
+      lower.panel = panel.cor)
+
+```
+
+Let's fit our first regression model.
+$$
+  \log \mathrm{Sales} = \beta_0 + \beta_1 \mathrm{TV} + \beta_2 \mathrm{Radio} + \beta_3 \mathrm{Newspaper} + \varepsilon
+$$
+
+The least squares method finds that
+
+```{r model1}
+
+lmod <- lm(logSales ~ TV + Radio + Newspaper, d2)
+lmod
+```
+
+Before I use the model to explore the effect sizes of advertising budgets and make predictions for the new markets, I make sure that the model fits the data well. For example, if the model fits the data well, then the plots of residuals against the predictors should not contain any meaningful patterns. Let's plot residuals against predictors and check if this is the case.
+
+```{r diagMod1, fig.cap="Residuals versus predictors for the first model"}
+d2.diag <- d2 %>% 
+  mutate(.fitted = fitted(lmod),
+         .resid = residuals(lmod))
+
+d2.diag %>% 
+  select(-logSales) %>% 
+  filter(.resid >-.7) %>% 
+  gather(key, val, -.resid) %>% 
+  ggplot(aes(val, .resid)) +
+  geom_ref_line(h=0) +
+  geom_point(col="gray") +
+  geom_smooth(se=FALSE, span=.4, method="loess") +
+  facet_wrap(~key, scales="free")
+```
+
+
+Residuals plotted against TV in Figure \@ref(fig:diagMod1) show that the the model overestimates the sales for both low and high TV advertising budgets and underestimates for medium size TV budgets. The fit is unsatisfactory, and we need to improve the model before using it to study the relations and for predictions.
+
+
+Let me first regress *logSales* onto *Radio* and *Newspaper*:
+
+```{r}
+lmod2 <- lm(logSales ~ Radio + Newspaper, d2)
+lmod2
+
+d22.diag <- d2 %>% 
+  mutate(.fitted = fitted(lmod2),
+         .resid= residuals(lmod2))
+
+d22.diag %>% 
+  select(-logSales) %>% 
+  gather(key, val, -.resid) %>% 
+  ggplot(aes(val,.resid)) +
+  geom_ref_line(h=0) +
+  geom_point() +
+  geom_smooth(se=FALSE, span=0.3) +
+  facet_wrap(~key, scales="free")
+  
+```
+
+Let's zoom in the scatter of residuals against TV.
+
+```{r}
+d22.diag %>% 
+  filter(.resid>=-1) %>% 
+  ggplot(aes(TV, .resid))+
+  geom_ref_line(h=0)+
+  geom_point() +
+  geom_vline(xintercept = 30, lty="dashed") +
+  geom_vline(xintercept = 100, lty="dashed") +
+  geom_smooth(se=FALSE, span=0.2, method="loess")
+```
+
+Let me add two more terms $(TV-30)^+$ and $(TV-100)^+$ to the original model.
+```{r}
+
+tvpos30 <- function(x) max(x-30,0)
+
+d3 <- d2 %>% 
+  mutate(TV30 = map_dbl(TV, tvpos30),
+         TV100 = map_dbl(TV, ~max(.x-100,0)))
+
+lmod3 <- lm(logSales ~., data=d3)
+lmod3
+
+d3.diag <- d3 %>% 
+  mutate(.fitted = fitted(lmod3),
+         .resid = residuals(lmod3))
+
+d3.diag %>% 
+  select(-logSales) %>% 
+  filter(.resid >-.5) %>% 
+  gather(key, val, -.resid) %>% 
+  ggplot(aes(val, .resid)) +
+  geom_ref_line(h=0) +
+  geom_point(col="gray") +
+  geom_smooth(se=FALSE, span=.4, method="loess") +
+  facet_wrap(~key, scales="free")
+```
+
+Let me check if there is any evidence in the data for interaction between Radio and TV. Plot the 3-dim'l scatterplot logSales ~ TV + Radio.
+
+
+
+```{r, fig.asp=1}
+
+res.loess <- loess(logSales ~ TV + Radio, d3)
+
+logSales.on.grid <- 
+  expand.grid(TV=seq(min(d3$TV), max(d3$TV), len=21),
+            Radio=seq(min(d3$Radio), max(d3$Radio), len=21)) %>% 
+  mutate(logSales=map2_dbl(TV,Radio, 
+                           ~predict(res.loess,
+                          newdata=data.frame(TV=.x,
+                                        Radio=.y))))
+
+
+
+require(lattice)
+wireframe(logSales ~ TV + Radio, data=logSales.on.grid,
+          scales=list(arrows=FALSE))
+
+contourplot(logSales ~ TV + Radio, data=logSales.on.grid, region=TRUE)
+```
+
+From the figure, I notice that the marginal contribution of, say TV, increases with increasing value of *Radio*. That means that *Tv* and *Radio* interact. Let's modify the model to reflect that finding.
+
+```{r}
+d4 <- d3 %>% 
+  mutate(Radio25 = map_dbl(Radio, ~max(.x-25,0)))
+
+lmod4 <- lm(logSales ~ . + I(TV^2) + (TV + I(TV^2) + TV30 + TV100):(Radio+Radio25), data=d4)
+
+coef(lmod4) %>% names
+lmod4
+```
+
+Let me check the residuals of the new model.
+
+```{r}
+
+# plot(d4$TV, d4$logSales)
+# identify(d4$TV, d4$logSales)
+
+d42 <- d4 %>% 
+  filter(min_rank(TV)>2)
+
+
+lmod4 <- update(lmod4, data=d42)
+
+d4.diag <- d42 %>% 
+  mutate(.fitted = fitted(lmod4),
+         .resid = residuals(lmod4))
+
+d4.diag %>% 
+  select(-logSales) %>% 
+  filter(.resid >-.5) %>% 
+  gather(key, val, -.resid) %>% 
+  ggplot(aes(val, .resid)) +
+  geom_ref_line(h=0) +
+  geom_point(col="gray") +
+  geom_smooth(se=FALSE, span=.6, method="loess") +
+  facet_wrap(~key, scales="free")
+```
+
+
+Now all of the residual graphs look like null plots (containing no sensible patterns in them). 
+
+```{r}
+lmod4
+lmod5 <- step(lmod4)
+
+```
+
+The final model after appling step function is the following:
+```{r, echo=TRUE}
+lmod5
+```
+* Because the main effects  of the variables that appeared in any interaction effect are also in the final model, I do not need to take any further actions.
+
+* Next let me check again the residual plots and make sure that they look like a null plot.
+
+```{r finalCheck}
+d5.diag <- d42 %>% 
+  mutate(.fitted = fitted(lmod5),
+         .resid = residuals(lmod5))
+
+d5.diag %>% 
+  select(-logSales) %>% 
+  filter(.resid >-.5) %>% 
+  gather(key, val, -.resid) %>% 
+  ggplot(aes(val, .resid)) +
+  geom_ref_line(h=0) +
+  geom_point(col="gray") +
+  geom_smooth(se=FALSE, span=.6, method="loess") +
+  facet_wrap(~key, scales="free")
+```
+
+# Diagnostics
+
+rstudent()
+hatvalues()
+cooks
+```{r, out.width="100%", fig.asp=1}
+# rstudent()
+# hatvalues()
+# cooks.distance()
+
+require(broom)
+
+d42.diag <- augment(lmod5, d42) %>% 
+  mutate(RowNo=1:n(),
+         .stu.resid = rstudent(lmod5)) %>% 
+  select(RowNo, everything())
+
+d42.diag %>% 
+  ggplot(aes(RowNo, .stu.resid)) +
+  geom_ref_line(h=c(-3,3)) +
+  geom_point()
+
+d42.diag %>% 
+  filter(abs(.stu.resid)>3) %>% 
+  select(RowNo, .cooksd, everything()) %>% 
+  arrange(desc(.cooksd))
+
+np <- lmod5 %>% coef %>% length
+rat <- np/nrow(d42.diag)
+
+d42.diag %>% 
+  ggplot(aes(RowNo, .hat)) +
+  geom_ref_line(h=c(2*rat, 3*rat)) +
+  geom_point()
+
+## Plot Cook's distances
+
+d42.diag %>% 
+  ggplot(aes(RowNo, .cooksd)) +
+  geom_ref_line(h=c(.5,1)) +
+  geom_point()
+
+
+d43 <- filter(d42, d42.diag$.cooksd<1)
+
+lmod5.diag <- update(lmod5, data= d43)
+
+
+
+d43.diag <- d43 %>% 
+  mutate(.fitted = fitted(lmod5.diag),
+         .resid = residuals(lmod5.diag))
+
+d43.diag %>% 
+  select(-logSales) %>% 
+  filter(.resid >-.5) %>% 
+  gather(key, val, -.resid) %>% 
+  ggplot(aes(val, .resid)) +
+  geom_ref_line(h=0) +
+  geom_point(col="gray") +
+  geom_smooth(se=FALSE, span=.6, method="loess") +
+  facet_wrap(~key, scales="free")
+
+
+glance(lmod5)
+left_join(tidy(lmod5),
+          tidy(lmod5.diag),
+          by="term") %>% 
+  select(term,estimate.x,estimate.y) %>% 
+  rename(beta.5=estimate.x,
+         beta.6=estimate.y) %>% 
+  mutate_if(is_numeric, round, digits=5) %>% 
+  kable(caption="Influence of dropped market on the effects(coefficients) of the model", format="html") %>%
+  kable_styling()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

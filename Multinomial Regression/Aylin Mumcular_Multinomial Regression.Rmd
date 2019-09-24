@@ -1,0 +1,180 @@
+---
+title: "Multinomial Regression"
+author: "Aylin Mumcular"
+date: "19th April 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+require(magrittr)
+require(tidyverse)
+require(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I would like to study the factors that possibly are associated with party designations of voters.
+
+# Explore 
+```{r}
+d <- read_csv("nes96.csv") %>% select(-vote,-contains("LR")) %>% #reduce the data
+  select(PID,everything())
+  
+d <- d %>% mutate(PID=factor(PID)) 
+
+dim(d)
+head(d) #Predict which party a person votes for
+```
+
+```{r}
+
+d %>% select_if(is.numeric) %>% 
+  bind_cols(select(d,PID)) %>% 
+  gather(key=varname,val=value,-PID) %>%  
+  ggplot(aes(value))+
+  geom_density(aes(fill=PID),alpha=0.2)+
+  facet_wrap(~varname,scales="free")
+
+d %>% 
+  ggplot(aes(popul+0.1))+
+  geom_density(aes(fill=PID),alpha=0.3)+
+  scale_x_log10() #log transformation
+#People who favor democrat party tend to live in more crowded places
+
+d %>% 
+  ggplot(aes(popul))+
+  geom_density(aes(fill=PID),alpha=0.2)+
+  lims(x=c(0,2000))  #not clear, try boxplot 
+
+d %>% 
+  ggplot(aes(popul^0.1))+  
+  geom_density(aes(fill=PID),alpha=0.2)  
+#More or less the same pic we get by log transformation. Independent and republican are close to each other. 
+
+#res <- MASS::boxcox(I(d$popul+.01)~1,plotit=FALSE)
+#res
+
+
+#Income ve population seems significant
+```
+
+```{r}
+
+#d2 <- d  %>% mutate(educ=factor(educ,labels=c("HSdrop","HS","CCdeg","Coll","BAdeg","MAdeg","MS"),ordered=TRUE))
+  
+  
+  d %>%  count(educ)  #check education
+  
+  d <- d %>% mutate(educ=
+                 forcats::fct_collapse(educ, MS=c("MAdeg","MS"))) 
+
+d %>% count(PID,educ) %>% 
+   group_by(educ,PID) %>%  #Conditional probability
+   summarize(n=mean(n))
+   
+d %>% select(PID,educ) %>% table() %>% prop.table(1) %>% round(2) #in proportions
+
+d %>% select(educ,PID) %>% table()  
+
+d %>% select(educ,PID) %>% table() %>% prop.table(1) %>% round(2) #in proportions
+
+```
+
+# Model
+
+```{r}
+
+#Democrat is the first category, zero by default. Everything is relative to democrat.
+
+#contrasts(d$PID)
+#levels(d$PID)
+
+mmod <- nnet::multinom(PID ~., d,maxit=200)
+
+summary(mmod)
+
+
+```
+
+
+```{r}
+anova(update(mmod,.~.-TVnews),mmod) #Test ho that this is zero
+#We are unable to reject because of P value of 0.39
+
+anova(update(mmod,.~.-income),mmod) #Test ho that this is zero
+#p value is almost zero, so reject.
+
+anova(update(mmod,.~.-educ),mmod) #Test ho that this is zero
+#pvalue:0.17
+#H0: B2Educ=B3Educ=0
+#At 5% we are unable to reject. Education doesn't seem like an important feature while TVnews still in the model
+
+anova(update(mmod,.~.-educ-TVnews),mmod) #Test ho that this is zero
+##At 5% we are unable to reject. 
+
+anova(update(mmod,.~.-educ-TVnews-age-popul),mmod) 
+
+mmod1 <- step(mmod,trace=FALSE)
+#step(mmod)
+#Population and income seems significant, continue with them
+
+
+
+#Evaluate the model: Grouped data~Chi square
+
+```
+
+TVnews seem unimportant, while income looks very significant. 
+
+```{r}
+preds <- predict(mmod1,type="probs") 
+
+p <- preds[1,] 
+
+simul <- function(u,p){
+  findInterval(u,cumsum(p))+1} 
+
+  
+set.seed(451)
+st <- invisible(system.time({nboot <- 1000
+deviance.list <- rep(NA,nboot)
+
+for(i in seq(nboot)){
+  
+  PID.boot <- preds %>% 
+  as_tibble %>% 
+  mutate(u=runif(n()), 
+         p=pmap(list(Democrat,Independent,Republican),
+                ~c(..1,..2,..3)), 
+                pidid=map2_dbl(u,p,simul),
+                PID=c("Democrat","Independent","Republican")[pidid]) %>% 
+                extract2("PID")
+  
+  deviance.list[i] <- deviance(update(mmod1,data=mutate(d,PID=PID.boot),maxit=500))
+         } 
+}))
+
+st
+
+deviance.list %>% density %>% plot()
+abline(v=deviance(mmod1))
+pvalue <- mean(deviance.list>deviance(mmod1))
+pvalue
+
+```
+
+Unable to reject
+
+
+
+
+
+
+
+
+
+
+
+
+

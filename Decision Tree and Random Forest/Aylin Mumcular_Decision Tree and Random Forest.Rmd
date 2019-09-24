@@ -1,0 +1,94 @@
+---
+title: "Decision Tree and Random Forest"
+author: "Aylin Mumcular"
+date: "14th May 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+require(magrittr)
+require(tidyverse)
+require(knitr)
+require(rpart)
+require(rpart.plot)
+require(randomForest)
+knitr::opts_chunk$set(echo = TRUE)
+d <- ISLR::Hitters
+```
+
+```{r}
+res.rp <- rpart(Salary~.,d,cp=0.001)
+res.rp
+rpart.plot(res.rp) 
+#Recursive partitioning 
+
+predict(res.rp,newdata=d[17,]) #First grow a very large tree, then prune it
+
+printcp(res.rp)   
+
+plotcp(res.rp) #Anything below the line is statistically indifferent. I make a choice in favor of a simpler model. The title shows the size of the trees. 
+
+res.pruned <- prune(res.rp,cp=.2) 
+rpart.plot(res.pruned) 
+
+predict(res.pruned,newdata=d[17,])
+#Use MSE to check goodness of fit. This is a nonparametric model, I can just use predictions. Pick the one that gives lowest MSE based on predictions. 
+
+
+```
+
+```{r}
+set.seed(1)
+
+id <- sample(c(FALSE,TRUE),nrow(d),rep=TRUE)
+
+table(id)
+d1 <- d[id,]
+d2 <- d[!id,]
+res.rp1 <- rpart(Salary~.,d1,cp=0.02)
+res.rp2 <- rpart(Salary~.,d2,cp=0.02)
+
+rpart.plot(res.rp1)
+rpart.plot(res.rp2)
+
+
+set.seed(3)
+s <- sample(1:40,rep=TRUE) 
+table(s) #T1 and T2 are not independent
+
+```
+
+Bagging
+
+```{r}
+res.rf <- randomForest(Salary~.,na.omit(d),mtry=ncol(d)-1)
+
+res.rf
+
+
+```
+RandomForest
+
+```{r}
+res.rf <- randomForest(Salary~.,na.omit(d))
+res.rf
+#Choose the lowest MSE
+```
+
+```{r}
+plot(res.rf) #Error after so many trees. Error sharply decreases.
+
+```
+
+```{r}
+res.rf <- randomForest(Salary~.,na.omit(d),importance=TRUE) #Importance of a variable calculated. For each variable accross 500 trees an importance score assigned to variables based on the decrease in MSE. 
+res.rf
+
+importance(res.rf,type=1) #first column
+
+varImpPlot(res.rf,type=1) 
+
+```
+
